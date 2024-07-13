@@ -1,32 +1,76 @@
-name: Deploy Node.js Express App to Azure Web App
+# Node.js Express Web App to Linux on Azure
+# Build a Node.js Express app and deploy it to Azure as a Linux web app.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/javascript
 
-on:
-  push:
-    branches:
-      - main  # Change to your deployment branch if it's different
+trigger:
+  - main
 
-jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest
+variables:
+  # Azure Resource Manager connection created during pipeline creation
+  azureSubscription: "eac75657-84e8-4026-b049-4ef3892ccad2"
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+  # Web app name
+  webAppName: "integrationninja"
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v2
-      with:
-        node-version: '14'  # Change to your required Node.js version
+  # Environment name
+  environmentName: "integrationninja"
 
-    - name: Install dependencies
-      run: npm install
+  # Agent VM image name
+  vmImageName: "ubuntu-latest"
 
-    - name: Run tests
-      run: npm start
+stages:
+  - stage: Build
+    displayName: Build stage
+    jobs:
+      - job: Build
+        displayName: Build
+        pool:
+          vmImage: $(vmImageName)
 
-    - name: Deploy to Azure Web App
-      uses: azure/webapps-deploy@v2
-      with:
-        app-name: integrationninja
-        slot-name: production
-        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: "18.x"
+            displayName: "Install Node.js"
+
+          - script: |
+              npm install
+              npm start --if-present
+            displayName: "npm install, build and test"
+
+          - task: ArchiveFiles@2
+            displayName: "Archive files"
+            inputs:
+              rootFolderOrFile: "$(System.DefaultWorkingDirectory)"
+              includeRootFolder: false
+              archiveType: zip
+              archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+              replaceExistingArchive: true
+
+          - upload: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+            artifact: drop
+
+  - stage: Deploy
+    displayName: Deploy stage
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: Deploy
+        displayName: Deploy
+        environment: $(environmentName)
+        pool:
+          vmImage: $(vmImageName)
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureWebApp@1
+                  displayName: "Azure Web App Deploy: integrationninja"
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appType: webAppLinux
+                    appName: $(webAppName)
+                    runtimeStack: "NODE|10.10"
+                    package: $(Pipeline.Workspace)/drop/$(Build.BuildId).zip
+                    startUpCommand: "npm run start"
